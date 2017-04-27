@@ -1,0 +1,516 @@
+\documentclass[paper=a4, fontsize=11pt]{scrartcl}
+\usepackage{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage{fourier}
+\usepackage{lipsum} % Used for inserting dummy 'Lorem ipsum' text into the template
+\usepackage{sectsty} % Allows customizing section commands
+\usepackage{graphicx} 
+\usepackage{float}
+\usepackage[export]{adjustbox}
+\usepackage[super]{nth}
+\RequirePackage{booktabs}
+\RequirePackage{siunitx}
+\usepackage{hyperref} % To have links to URLs
+\allsectionsfont{\centering\normalfont\scshape}
+
+\begin{document}
+
+\thispagestyle{empty}
+
+\begin{figure}[H]
+    \includegraphics[width=0.5\textwidth, center]{ucc_logo}
+\end{figure}
+
+\vspace{1.0em}
+
+\begin{center}
+	{\LARGE \textbf{CS6405 Data Mining}} \\
+	
+	\vspace{1.5em}
+	
+	\textsl{Madiyar Tuleuov, 116224046}
+	
+	\vspace{0.5em}
+	
+	\textsl{Xinqi Li, 116222466}
+ \\
+\end{center}
+
+\begin{center}
+    \nth{2} April 2017
+\end{center}
+
+
+\begin{center}
+\tableofcontents
+\end{center}
+\newpage
+
+
+
+\section{Introduction}
+In this project we are aiming to classify the forest cover type using the cartographic features.
+We have tried 4 different classification algorithms: Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), K-Nearest Neighbours (KNN) and Support Vector Machines (SVM). We have used the following packages: MASS (to run LDA, QDA), caret(QDA,KNN), e1071(SVM), car(To plot the scatterplot), ggplot2(plotting), dplyr(manipulating the data)
+At the end of the project we have arrived to the conclusion that different models predict certain types of the cover type better than the others. Also, we found that accuracy rate might be quite misleading in the multiple classification problem.
+
+
+\section{Data Wrangling}
+
+In this section we transform our raw data into the data which we can analyze. First, we have observed that columns Wilderness Area and Soil Type are stored in many columns. So, we organised all the corresponding columns to the one column and called them Wilderness Area and SoilType. If we could have left the data as it is, it would lead to the multiple problems such as: 
+
+\begin{enumerate}
+  \item  Multicollinearity, as columns basically are storing the same information its reasonable to expect them to be highly correlated. 
+  \item Practical issues, our plots and graphs might not be meaningful, because R works on the basis of vectors and matrices, its essential that our data is stored in order. 
+\end{enumerate}
+
+After we have cleaned the data and stored it as csv file, it was now important to normalize the variables. As initially our variables all had different scale, we couldn't compare them, apples and oranges problem. Moreover, because the LDA, QDA and KNN are based on calculating the distances, its important that observations lie in between 0 and 1.
+
+
+<<Loading Libraries, echo = FALSE,warning=FALSE>>=
+suppressMessages( library(MASS))# For LDA and QDA
+suppressMessages(library(caret)) # For LDA and QDA, KNN
+suppressMessages(library(ggplot2)) # Plotting Graphs
+suppressMessages(library(dplyr)) #Data Cleaning
+suppressMessages(library(e1071)) # For SVM
+suppressMessages(library(car)) # For Scatter plot
+@
+
+
+<<Data Cleaning, echo = FALSE>>= 
+forest = "~/Desktop/Forest Data"
+setwd(forest)
+covtype = read.csv("~/Desktop/Forest Data/covtype.data.txt", header=FALSE)
+vars=c('elevation','aspect','slope','horizontaldistancetohydrology','verticaldistancetohydrology','horizontaldistancetoroadways','hillshade9am','hillshadenoon','hillshade3pm','horizontaldistancetofirepoints','Wildernessarea_1','Wildernessarea_2','Wildernessarea_3','Wildernessarea_4',paste('soiltype',1:40,sep='_'),'covertype')
+names(covtype)=vars
+wildareas=matrix(rep(1:4,nrow(covtype)),nrow=nrow(covtype),ncol=4,byrow=TRUE)
+areamask=as.matrix(covtype[,paste('Wildernessarea',1:4,sep='_')])
+areamask=matrix(as.logical(areamask),nrow=nrow(covtype),ncol=4)
+covtype$Wildernessarea=wildareas[areamask]
+covtype$soiltype = apply(covtype[,grep('soiltype_',names(covtype))],1,which.max)
+covtype$soiltype=factor(covtype$soiltype,level=1:40,labels=c(2702,2703,2704,2705,2706,2717,3501,3502,4201,4703,4704,4744,4758,5101,5151,6101,6102,6731,7101,7102,7103,7201,7202,7700,7701,7702,7709,7710,7745,7746,7755,7756,7757,7790,8703,8707,8708,8771,8772,8776))[,drop=TRUE]
+dropcols=c('Wildernessarea_1','Wildernessarea_2','Wildernessarea_3','Wildernessarea_4',paste('soiltype',1:40,sep='_'))
+keepcols=setdiff(names(covtype),dropcols)
+covtype=covtype[,keepcols]
+covtype$covertype=factor(covtype$covertype,level=1:7,labels=c('fir','pinelp','pinepr','willow','aspen','firdg','khlz'))
+csv_tree='treecover_2.csv'
+write.csv(covtype,csv_tree,row.names=FALSE)
+treetype = covtype$covertype
+treetype =factor(treetype,levels=c(levels(treetype),'pf','o'))
+pfidx=treetype %in% c('fir','pinepr','firdg')
+treetype[pfidx]='pf'
+treetype[!pfidx]='o'
+treetype=factor(treetype)
+covtype$treetype=treetype
+@
+
+
+<<Data Normalization, echo = FALSE>>= 
+#Data Cleaning and Normalization:
+
+treecover_1 <- read.csv("~/Desktop/Forest Data/treecover_2.csv")
+treecover_1$Wildernessarea <- factor(treecover_1$Wildernessarea)
+treecover_1$soiltype <- factor(treecover_1$soiltype)
+normalise <- function( column, minc = min( column ), maxc = max( column ) ) {
+  return ((column - minc) / (maxc - minc))
+}
+treecover <- as.data.frame(lapply(treecover_1[1:10],normalise))
+treecover <- cbind(treecover, treecover_1[11:13])
+# Training and Testing Sets imbalanced
+sample <- treecover[,1:11]
+training_set_ubl <- sample[sample(nrow(sample), size=14000, replace = FALSE),]
+testing_set_ubl <- setdiff(sample,training_set_ubl)
+@
+
+\section{Exploratory Data Analysis}
+
+
+In this section, we try to explore how the data looks like and conduct some preliminary analysis.
+
+<<Correlation Matrix, echo = FALSE>>= 
+data_graph <- treecover[sample(nrow(treecover), size=2000, replace = FALSE),]
+pairs(data_graph[1:10])
+@
+
+From the first plot we can see the correlation between the variables is not high and even it looks more uncorrelated, with few exceptions. This is good, it means that we wont have any problems with multicolliniarity which implies poor estimation of coefficents.
+
+<<Ploting Scatter plot, echo = FALSE>>= 
+# Take only 2000, to execute the command fast
+scatterplotMatrix(data_graph[1:10])
+@
+
+
+
+Then we have decided to plot the distribution of the variables, to assess what algorithms might be useful in this dataset. We can see from the plot the Elevation is approprixamtely normally distributed, Aspect looks like double normally distributed, however some variables are highly skewed. However, of course as we have multinomial problem here, it becomes harder to imagine how the distributions will look like, but from graph we can speculate that they are Gaussian Distributed.
+
+(For the following, find the boxplots in the Appendix)
+Then we have decided to plot the boxplots, variables versus covertype, to have an idea what  variables helps us the most to separate between the different classes of covertype. As we can see Elevation is quites significant in separating, other variables add insignificant importance in the separation between the cover types.
+
+<<Proportion for each covertype, echo = FALSE, out.width="5in">>=
+graph_1 <-  count(treecover, covertype) %>% mutate(observations = n/581012)
+p <- ggplot(graph_1, aes(covertype, observations))
+p + geom_col()
+@
+
+
+As last we decided to plot the number of observations for each cover type. Basically, y-axis is the proportions, we have decided to put proportions for more meaningful interpretation.
+As we can see, the data is quite imbalanced. In the sense that some cover types have few observations and others the most. For example, the greatest proportion of the data is on cover types Fir and Pinelp. This might cause some issues in algorithm perfomance and in metrics.
+However, these are all preliminary and informal analysis, but give very quick insights about the data we are dealing with.Also, it gives an idea of what kind of algorithms to use. 
+
+Another conclusion we can draw is that Principal Component Analysis is not necessary in our case, as number of predictors is small and they all are uncorrelated. So, the application of the PCA not going to improve the results significantly. Moreover, as we decided to run LDA, it will select the best combination of the variables. LDA is an alternative to the PCA, with exception that it only applies within the LDA algorithm.
+
+
+\section{Methods}
+
+The size of the data is quite large and number of predictors is relatively small. Hence, non-parametric methods might prove to be more useful. 
+
+In addition, if we look at the figure 2, the relationship between the predictors is non linear, another sign that parametric approaches might not be the best choice to start with. This is the main motivation behind the methods we have applied.
+
+As the data is quite large, it takes a long time to compile. Thus, for LDA, QDA and KNN, we decided to first use 20000 randomly sampled observations as training set and used the rest of data as testing set. We will first work on these data to have a general idea of the performance of each algorithm.
+
+\subsection{Linear Discriminant Analysis}
+
+LDA calculates the prior probabilities, the likelihood of predicting cover type at random without any information. Then it uses these probabilities to calculate posterior, the likelihood of certain cover types occurring given the observations. After it uses those probabilities to calculate the distances of each observation from the line.
+
+We simply fitted the lda on the training set and predicted on test. After we calculated the accuracy rates for the LDA. 
+Finally, we plotted the graph, to see how well LDA separates the cover types. From the Results we see that accuracy rates are quite misleading and that LDA misclassifies many cover types. Therefore, to address this issue we have balanced our dataset, so each cover type will have the same observations and called it balanced. 
+
+As its reasonable to assume that LDA assumption of equal covariances might be breached, we then moved to estimating QDA.
+
+
+<<LDA and Data BALANCING,echo = FALSE>>=
+
+# Training and Testing Sets imbalanced
+sample <- treecover[,1:11]
+training_set_ubl <- sample[sample(nrow(sample), size=14000, replace = FALSE),]
+testing_set_ubl <- setdiff(sample,training_set_ubl)
+
+@
+
+
+
+<<model1 using imbalanced data, echo = FALSE>>=
+tlda = lda(covertype ~ ., data =  training_set_ubl)
+plda = predict(tlda, testing_set_ubl)
+t0 <- table(plda$class, testing_set_ubl$covertype)
+m0 <- mean(plda$class!=testing_set_ubl$covertype)
+@
+
+
+<<BALANCING DATA, echo = FALSE>>=
+tr_aspen <- dplyr::filter(sample, covertype=="aspen")
+tr_fir <- dplyr::filter(sample, covertype=="fir")
+tr_firdg <- dplyr::filter(sample, covertype=="firdg")
+tr_khlz <- dplyr::filter(sample, covertype=="khlz")
+tr_pinelp <- dplyr::filter(sample, covertype=="pinelp")
+tr_pinepr <- dplyr::filter(sample, covertype=="pinepr")
+tr_willow <- dplyr::filter(sample, covertype=="willow")
+
+#get 2000 rows from each class, 14000 in total for training set
+t_aspen <- tr_aspen[sample(nrow(tr_aspen), size=2000, replace=FALSE),]
+t_fir <- tr_fir[sample(nrow(tr_fir), size=2000, replace=FALSE),]
+t_firdg <- tr_firdg[sample(nrow(tr_firdg), size=2000, replace=FALSE),]
+t_khlz <- tr_khlz[sample(nrow(tr_khlz), size=2000, replace=FALSE),]
+t_pinelp <- tr_pinelp[sample(nrow(tr_pinelp), size=2000, replace=FALSE),]
+t_pinepr <- tr_pinepr[sample(nrow(tr_pinepr), size=2000, replace=FALSE),]
+t_willow <- tr_willow[sample(nrow(tr_willow), size=2000, replace=FALSE),]
+
+#combine into a single data frame
+training_set_bl <- t_aspen
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_fir)
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_firdg)
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_khlz)
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_pinelp)
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_pinepr)
+training_set_bl <- dplyr::bind_rows(training_set_bl, t_willow)
+testing_set_ubl_2 <- setdiff(sample, training_set_bl)
+@
+
+<<Execute LDA on BALANCED, echo = FALSE>>=
+#model1 - imbalanced data, center&scale
+tlda_2 <- lda(covertype ~ ., data =  training_set_bl)
+plda_1 = predict(tlda_2, testing_set_ubl_2)
+t1 <- table(plda_1$class, testing_set_ubl_2$covertype)
+m1 <- mean(plda_1$class!=testing_set_ubl_2$covertype)
+@
+
+\subsection{Quadratic Discriminant Analysis}
+
+Quadratic Discriminant Analysis is similar to LDA. They both based on the same theories while QDA allows for different covariances among classes. So QDA is more flexible than LDA because the decision boundary is quadratic. Here we trained the testing set using QDA classifier and then we applied the trained model to the testing set to evaluate the algorithm and see if it performs better than LDA. 
+
+
+<<QDA,echo = FALSE>>=
+tqda = qda(covertype ~ ., data =  training_set_ubl)
+pqda = predict(tqda, testing_set_ubl)
+t2 <- table(pqda$class, testing_set_ubl$covertype)
+m2 <- mean(pqda$class!=testing_set_ubl$covertype)
+@
+
+
+<<QDA BALANCED, echo = FALSE>>=
+tqda_2 <- qda(covertype ~ ., data =  training_set_bl)
+pqda_1 = predict(tqda_2, testing_set_ubl_2)
+t3 <- table(pqda_1$class, testing_set_ubl_2$covertype)
+M3 <- mean(pqda_1$class!=testing_set_ubl_2$covertype)
+@
+
+
+\subsection{K-Nearest Neighbours}
+Then we tried K-Nearest Neighbours classification algorithm. Unlike LDA and QDA, KNN is completely non-parametric which means it makes no assumptions about the decision boundary's shape. Thus, it may perform better than LDA and QDA when the decision boundary is greatly non-linear and very complicated. We trained the model using the training set and then used the testing set for making predictions. Next, we calculated the accuracy rate to evaluate the algorithm's performance. 
+
+
+<<KNN, echo = FALSE, eval = TRUE>>=
+trctrl <- trainControl(method = "cv", number = 10)
+
+#model1 imbalanced 
+knn_fit_ubl <- train(covertype~., data = training_set_ubl, method = "knn", 
+                     trControl = trctrl,
+                     tuneLength = 10)
+#making prediction
+knn_predict_ubl <- predict(knn_fit_ubl, newdata = testing_set_ubl)
+
+#model2 balanced
+knn_fit_bl <- train(covertype~., data = training_set_bl, method = "knn", 
+                    trControl = trctrl,
+                    tuneLength = 10)
+#making prediction
+knn_predict_bl <- predict(knn_fit_bl, newdata = testing_set_ubl_2)
+
+
+@
+
+Now, we can use the 'bestTune' to check for the best k value for KNN.
+<<BEST TUNE, echo = TRUE>>=
+knn_fit_ubl$bestTune
+@
+
+As we can see from the out put, the best k value is 5.(We also can check the k<5, but we won't consider it in the project, future work)
+
+Notes on KNN, also we have found that as we increase the k, the accuracy rate decreases. Its happening because as k increases, we increase the neighbourhood, and therefore the decision boundaries are more likely to capture the datapoints corresponding to the cover types with the highest number of observations.
+
+\subsection{Support Vector Machines}
+So far we have fitted LDA, QDA and KNN have understood that these methods rely on the Bayes decision  boundary theorem. We decided to go for more flexible method and more strongly non-parametric approach,SVM. The SVM is different technique which relies on calculating the distances of each observation lying from the hyperplane. For our case, its applicable, as the number of predictors exceeds two, so we assume that the decision boundary is non linear. We use the kernels to capture and compute the boundaries. However, as you can imagine, the computation time is obvious drawback of this method.
+
+First we have lowered our training set to the 0.01 percent. Then we fit the SVM
+After, we run the tuning function, which tries to find the optimal cost and gammas to use, which gives the greatest accuracy for the given data. 
+Why we have gone with radial not with polynomial?
+
+As our p (number of predictors) is large, the decision variable is gonna be non-linear. Also, as the dataset is highly imbalanced, if we use the kernel polynomial there is a bigger chance to misclassify the cover types. In comparison with kernel radial which captures the decision boundary locally. 
+
+What does the cost stands for ?
+
+C is a tuning parameter, essentially is bias and variance trade off, if c = 0, it means that our algorithm will try to fit the datapoints, by lowering the margins, whereas if c>0 we allow our margin to vary by some c amount, so when we run the SVM on the test set it performs better (hopefully). 
+
+However, when we start to run we got the following
+
+\textbf{WARNING: Maximum Iterations Reached}
+
+Computation time is large because the algorithm tries to solve the optimisation problem, after it tries to fit those optimal options using Maximum Likelihood.
+We think that this warning can be ignored, because SVM tries to find the closest coefficient to the true value, but fails, because reaches the max number of iterations and then tries again. However, we left the program to run for 2 hours and we killed it. 
+
+Then, we have dropped the variable SoilType because it had 40 levels! It means that before SVM was working p+40 dimensions!
+
+So we are fitting the SVM with modified training set, which cut the time and we got out results.
+Of course, computing the Cross Validation, will be computationally hard, as it will repeat the process k times. 
+
+\subsection{Balancing data on LDA, QDA and KNN}
+
+Firstly, we have used the sample of 20,000 observations, to get the general idea of the performance of LDA, QDA and KNN. However, what we have found that our algorithms are highly affected by the imbalanced data. Therefore, we decided to balance it. The maximum number of observations we can have for each cover type in the testing set is equals to the number of observations in the Willow cover type. So we decided to put in our balanced training set 2000 random observations for each cover type, in total 14000, and we use the rest of the data to test.
+
+
+As the purpose of using the balanced data is to solve the problem of misclassification. With imbalanced data sets, an algorithm doesnít get the necessary information about the minority class to make an accurate prediction. For example, in the imbalanced dataset, the models tend to assign the covertypes with the lowest number of observations to the classes with the highest number. 
+
+To Analyze the difference we have considered four possible combinations of Balancing the data. They are:
+
+\begin{table}[H]
+\centering
+\caption{Balancing Combinations}
+\label{balancing-combinations}
+\begin{tabular}{|l|l|}
+\hline
+1 & Imbalanced Training and Imbalanced Test \\ \hline
+2 & Balanced Training and Imbalanced Test   \\ \hline
+3 & Imbalanced Training and Balanced Test   \\ \hline
+4 & Balanced Training and Balanced Test     \\ \hline
+\end{tabular}
+\end{table}
+
+
+
+Clearly combinations (3) and (4) are not suitable in our case. Because, (3) still has an imbalance problem and (4) is to ideal case, which is not always observed in real world. Using (1) and (2) we can
+compare and see clearly how the balancing works.
+
+
+\section{Results and Discussion}
+In this section, we analyze the results of 4 algorithms and the ways to improve them.
+
+LDA selected first two linear combinations of Elevation and Aspect, as it believes these two variables mostly explain the separation between the cover types. Looking at the error rate, LDA performs well.
+
+<<Plot LD1 vs LD2, echo = FALSE, warning=FALSE>>=
+prop.lda = tlda$svd^2/sum(tlda$svd^2)
+dataset = data.frame(covertype = testing_set_ubl[,"covertype"],lda = plda$x)
+ggplot(dataset) + geom_point(aes(lda.LD1, lda.LD2, colour = covertype, shape = covertype), size = 2.5) + 
+  labs(x = paste("LD1 (", 100*(prop.lda[1]), ")", sep=""),
+       y = paste("LD2 (", 100*(prop.lda[2]), ")", sep=""))
+@
+
+Now lets plot how LD1 and LD2 separates the cover types. The graph looks messy, we can see that LD1 and LD2 are doing ok at separating firdg but still to many misclassifications. However, why are  we getting such high accuracy rate ? 
+
+<<Prior Probabilities Plot, echo = FALSE>>=
+r <- lda(covertype ~ ., data = sample) 
+plot(r$prior, type = 'l', ylab = "Prior Probabilities", xlab = "Cover Type")
+@
+
+
+Looking into the plot, we can see that there are different prior probabilities. The way LDA works, all its calculations are based on the prior probabilities. So because for the certain forest types probability is high, it means that posterior will be high, as there are more observations for the class. Thats why, we believe, LDA misclassifies the cover types and mainly assigns them to the classes with highest number of observations.
+
+How does this affect our accuracy rate?
+
+Because the classes that have highest probability, tend to have the lowest error rate, again this is due to the high number of observations.
+Therefore, we think that accuracy rate is not good metrics to evaluate the algorithms, in our multiple classification problem. We tackled the problem, by balancing the data.
+From the Confusion Matrix, if we look at the sensitivity, we see that LDA most of the time correctly classifies pinpl, fir and asl and poorly classifies the rest. This happens because these 3 types have the largest number of observations. 
+
+
+After we have balanced the data, and fitted the LDA,QDA and KNN the results improved:
+
+As we can see, now LDA correctly classifies the types of the forest. However, the overall accuracy rate has gone lower. The reason for this is, after balancing the data, the accuracy rate of classifying the minority classes increased a lot. However, this also decreased the accuracy rate of classifying the classes which have large number of observations. As the data is greatly imbalanced, even a 1\% decrease in the accuracy rate of classifying the classes with large number of observations will cause hundreds of misclassifications.  
+
+As a result, of the reasons above, we need to use different metrics, as accuracy rate is quite misleading. We have chosen to look at the sensitivity, which is the proportion of true cover types identified.
+
+Using the similar logic as above, we calculated the confusion matrix and sensitivity. 
+
+\begin{table}[H]
+\centering
+\caption{Sensitivity Analysis}
+\label{sensitivity-analysis}
+\begin{tabular}{|l|l|l|l|l|l|l|l|l|}
+\hline
+                        & aspen          & fir            & firdg          & khlz           & pinelp         & pinepr         & willow         & Accuracy Rate   \\ \hline
+LDA (Imbalanced)        & 0.012          & 0.724          & 0.289          & 0.104          & 0.766          & 0.621          & 0.090          & 0.6884          \\ \hline
+LDA (Balanced)          & 0.748          & 0.549          & 0.564          & 0.882          & 0.429          & 0.342          & 0.855          & 0.4912          \\ \hline
+QDA (Imbalanced)        & 0.194          & 0.7724         & 0.505          & 0.363          & 0.617          & 0.623          & 0.412          & 0.6538          \\ \hline
+QDA (Balanced)          & 0.669          & 0.634          & 0.704          & 0.858          & 0.444          & 0.438          & 0.819          & 0.5382          \\ \hline
+KNN (Imbalanced)        & 0.261          & 0.756          & 0.422          & 0.539          & 0.820          & 0.672          & 0.272          & 0.7539          \\ \hline
+\textbf{KNN (Balanced)} & \textbf{0.926} & \textbf{0.612} & \textbf{0.761} & \textbf{0.955} & \textbf{0.506} & \textbf{0.650} & \textbf{0.941} & \textbf{0.5812} \\ \hline
+\end{tabular}
+\end{table}
+
+From the Table 2 above we can see that using the imbalanced testing set, the sensitivities are really imbalanced. For example, aspen, firdg, khlz and willow have really low sensitivities. This may because that these cover types are the minority classes in the data. However, after balancing the data, we can see the sensitivities of these cover types were significantly increased.The advantage of using balanced data is that we can increase the accuracy rate of predicting the minority classes. 
+
+We can deduce that some models are better at classifying certain cover types than the others. For example, LDA (Balanced) is good at separating aspen, khlz and willow from the others, whereas QDA (Balanced) is good at separating aspen, fir, firdg, khlz and willow from the pinel and pinepr. Finally, if we look at KNN (Balanced), it classified the classes very well, it did only poorly on classifying pinelp.
+
+Therefore, we can see that all the models are good at separating certain types. For, now we conclude that KNN is the most suitable method to use given the dataset we are dealing with.
+<<echo = TRUE, eval = FALSE>>=
+#SVM Model:
+treecover_svm <- treecover[,1:11]
+treecover_svm$covertype <- as.factor(treecover_svm$covertype)
+partition <- createDataPartition(y=treecover_svm$covertype, p=0.01, list=FALSE)
+training_svm <- treecover_svm[partition,]
+testing_svm <- treecover_svm[-partition,]
+#Now using radial:
+svmfit_1=svm(covertype~., data=training_svm 
+             , kernel ="radial", cost=100,gamma=1 ,scale=FALSE)
+tune.out=tune(svm ,covertype~.,data=training_svm 
+              ,kernel ="radial"
+              ,ranges=list(cost=c(0.1, 1,5),gamma=c(0.5,1,2)))
+summary(tune.out)
+svmfit_2=svm(covertype~., data=training_svm 
+             , kernel ="radial", cost=5,gamma=0.5 ,scale=FALSE)
+svm_pred = predict(svmfit_1, testing_svm)
+confusionMatrix(svm_pred, testing_svm$covertype)
+@
+
+For SVM , the accuracy rate is only about 40\%, this is quite strange, so we investigated. As you can see it assigns all the covertypes to the pinelp. We have looked at the code and couldnt find any mistake. So further investigation is needed.
+
+\section{Conclusion}
+In conclusion, we have solved the problem of the imbalanced data and the consequences of it on the algorithms performance.
+So far we have tried LDA, QDA, KNN and SVM. From the results, we conclude that KNN is the best algorithm to use. However, we faced the issues with calculating SVM, as it was giving pretty low accuracy rate. Overall, we think we have covered all parts of analysis and diagnostics (e.g. EDA ,Balancing Data etc.) needed to successfully identify and improve the algorithms. 
+
+\subsection{Future Work}
+As we have stated in methods, we expect that non-parametric methods might be good at tackling this multiple classification problem. For example, it would be very interesting to perform Random Forest on our dataset. However, we know that flexible methods tend to overfit the data as it fits the "noise". So, it would be interesting to analyze the variances of errors by calculating Cross Validation. This would be useful to set a "treshhold for the variance" in order to treat the problem of overfitting. Of course more details you might find in our future work. 
+
+\section{Appendix}
+In this section, we have plots and some details about how we have performed the sensitivity analysis. As we are going to run out of the page limit, we decided no to print the confusion matrices, but the code is shown below
+
+Below, are the boxplots, of the variables which are the most significant in the separating the cover types. 
+\vspace{0.5em}
+
+<<Boxplots, echo = FALSE, out.width= "5in">>=
+p_1 <- ggplot(data_graph, aes(covertype, elevation))
+p_1 + geom_boxplot()
+p_2 <- ggplot(data_graph, aes(covertype, aspect))
+p_2 + geom_boxplot()
+p_3 <- ggplot(data_graph, aes(covertype, slope))
+p_3 + geom_boxplot()
+@
+
+
+
+Following are the commands we have used to calculate the sensitivy, if need to execute, change eval = TRUE.
+<<LDA imbalanced Data Confusion Matrix, echo = TRUE, eval = FALSE>>=
+confusionMatrix(plda$class, testing_set_ubl$covertype)
+@
+
+<<Conf Matrix BALANCED LDA, echo=TRUE, eval=FALSE>>=
+confusionMatrix(plda_1$class, testing_set_ubl_2$covertype)
+@
+
+<<Confus Matrix INBALANCED QDA, echo = TRUE, eval = FALSE>>=
+confusionMatrix(pqda$class, testing_set_ubl$covertype)
+@
+
+<<Conf Matrix QDA BALANCED, echo = TRUE, eval = FALSE>>= 
+confusionMatrix(pqda_1$class, testing_set_ubl_2$covertype)
+@
+
+<<Conf Matrix KNN, INBALANCED DATA,echo = TRUE, eval = FALSE>>=
+confusionMatrix(knn_predict_ubl, testing_set_ubl$covertype)
+@
+
+<<Conf Matrix KNN,BALANCED DATA,echo = TRUE, eval = FALSE>>=
+confusionMatrix(knn_predict_bl, testing_set_ubl_2$covertype)
+@
+
+
+
+\begin{thebibliography}{9}
+
+\bibitem{ISLR} 
+    James, Gareth et al.\\
+    \textit{An Introduction to Statistical Learning with Applications in R. Springer. ISBN: 978-1-4614-7137-0.}
+
+\bibitem {caret}
+    The 'caret' Package, \url{https://topepo.github.io/caret/}
+    
+\bibitem {mass}
+    The 'MASS' Pakage, \url{https://cran.r-project.org/web/packages/MASS/index.html}
+    
+\bibitem {e1071}
+    The 'e1071' Pakage, \url{https://cran.r-project.org/web/packages/e1071/index.html}
+
+\bibitem {dplyr}
+    'dplyr' Cheat Sheet, \url{https://www.rstudio.com/wp-content/uploads/2015/02/data-wrangling-cheatsheet.pdf}
+
+\bibitem {ggplot2}
+    The 'ggplot2' Pakage, \url{https://cran.r-project.org/web/packages/ggplot2/index.html}
+
+\bibitem {ggplot2_cheat}
+    The 'ggplot2' Cheat Sheet, \url{https://www.rstudio.com/wp-content/uploads/2015/03/ggplot2-cheatsheet.pdf}
+
+\bibitem {computing-and-visualizing-lda}
+    Computing and visualizing LDA in R, \url{https://www.r-bloggers.com/computing-and-visualizing-lda-in-r/}    
+
+\bibitem {class_imbalance_problem}
+    Class Imbalance Problem, \url{http://www.chioka.in/class-imbalance-problem/}
+
+\bibitem {caret_knn}
+    KNN R, K-NEAREST NEIGHBOR IMPLEMENTATION IN R USING CARET PACKAGE, \url{http://dataaspirant.com/2017/01/09/knn-implementation-r-using-caret-package/}
+
+\bibitem {imbalanced}
+    Practical Guide to deal with Imbalanced Classification Problems in R, \url{https://www.analyticsvidhya.com/blog/2016/03/practical-guide-deal-imbalanced-classification-problems/}
+    
+\bibitem {normal}
+    Normal Distribution, \url{https://en.wikipedia.org/wiki/Normal_distribution}
+
+\end{thebibliography}
+
+\end{document}
